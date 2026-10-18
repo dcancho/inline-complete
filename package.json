@@ -1,0 +1,90 @@
+{
+  "name": "inline-complete",
+  "displayName": "Inline Complete",
+  "description": "FIM inline code completion backed by a local Ollama model",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "inlineComplete.toggle",
+        "title": "Inline Complete: Toggle"
+      }
+    ],
+    "configuration": {
+      "title": "Inline Complete",
+      "properties": {
+        "inlineComplete.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "inlineComplete.endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434"
+        },
+        "inlineComplete.model": {
+          "type": "string",
+          "default": "qwen2.5-coder:3b-base"
+        },
+        "inlineComplete.debounceMs": {
+          "type": "number",
+          "default": 150
+        },
+        "inlineComplete.numCtx": {
+          "type": "number",
+          "default": 8192
+        },
+        "inlineComplete.numPredict": {
+          "type": "number",
+          "default": 64
+        },
+        "inlineComplete.temperature": {
+          "type": "number",
+          "default": 0.2
+        },
+        "inlineComplete.maxPrefixChars": {
+          "type": "number",
+          "default": 6000
+        },
+        "inlineComplete.maxSuffixChars": {
+          "type": "number",
+          "default": 1500
+        },
+        "inlineComplete.singleLine": {
+          "type": "boolean",
+          "default": false
+        },
+        "inlineComplete.requestTimeoutMs": {
+          "type": "number",
+          "default": 3000
+        },
+        "inlineComplete.automaticNumPredict": {
+          "type": "number",
+          "default": 32
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node esbuild.mjs --smoke && node dist/smoke.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3"
+  }
+}
