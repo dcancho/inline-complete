@@ -1,7 +1,7 @@
 import * as vscode from 'vscode'
 import { Config, readConfig } from './config'
 import { CompletionCache } from './cache'
-import { cleanCompletion } from './postprocess'
+import { cleanCompletion, suffixStop } from './postprocess'
 import { fetchCompletion, prime } from './ollama'
 import { SymbolContextStore } from './symbols'
 import { Telemetry } from './telemetry'
@@ -85,14 +85,15 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
 
     const cached = this.cache.lookup(prefix)
     if (cached) {
-      this.output.info(`cache hit, ${cached.length} chars`)
+      this.output.info(`cache hit, ${cached.text.length} chars from ${cached.origin}`)
       this.telemetry.record({
         event: 'cache_hit',
         id,
+        origin: cached.origin,
         lang: document.languageId,
-        suggestionChars: cached.length
+        suggestionChars: cached.text.length
       })
-      return [this.toItem(cached, position, id)]
+      return [this.toItem(cached.text, position, cached.origin)]
     }
 
     const automatic = context.triggerKind === vscode.InlineCompletionTriggerKind.Automatic
@@ -112,7 +113,7 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
       return undefined
     }
 
-    this.cache.store(prefix, text)
+    this.cache.store(prefix, text, id)
     return [this.toItem(text, position, id)]
   }
 
@@ -185,22 +186,24 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
     const started = Date.now()
 
     try {
+      const stop = suffixStop(call.suffix)
       const result = await fetchCompletion(
         config,
-        { prefix: call.prefix, suffix: call.suffix },
+        { prefix: call.prefix, suffix: call.suffix, stops: stop ? [stop] : [] },
         controller.signal
       )
       if (token.isCancellationRequested) {
         return undefined
       }
 
-      const text = cleanCompletion(result.text, call.suffix, config.singleLine)
+      const truncated = result.doneReason === 'length'
+      const text = cleanCompletion(result.text, call.suffix, config.singleLine, truncated)
       const wallMs = Date.now() - started
 
       this.output.info(
         `${wallMs}ms prefix=${call.prefix.length} chars (${call.block.length} symbols), ` +
           `raw ${result.text.length} chars, suggestion ${text?.length ?? 0} chars, ` +
-          `prefill ${result.prefillMs}ms decode ${result.decodeMs}ms`
+          `prefill ${result.prefillMs}ms decode ${result.decodeMs}ms, done ${result.doneReason}`
       )
       if (result.text.length > 0 && text === undefined) {
         this.output.debug(`discarded by cleanup: ${JSON.stringify(result.text)}`)
@@ -216,6 +219,8 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
         blockChars: call.block.length,
         rawChars: result.text.length,
         suggestionChars: text?.length ?? 0,
+        doneReason: result.doneReason,
+        truncated,
         wallMs,
         promptTokens: result.promptTokens,
         outputTokens: result.outputTokens,

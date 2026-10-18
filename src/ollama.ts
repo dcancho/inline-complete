@@ -5,10 +5,12 @@ export const FIM_STOPS = ['<|endoftext|>', '<|fim_pad|>', '<|file_sep|>', '<|fim
 export interface FimRequest {
   prefix: string
   suffix: string
+  stops?: string[]
 }
 
 export interface FimResult {
   text: string
+  doneReason: string
   promptTokens: number
   outputTokens: number
   prefillMs: number
@@ -17,6 +19,7 @@ export interface FimResult {
 
 interface GenerateResponse {
   response?: string
+  done_reason?: string
   prompt_eval_count?: number
   prompt_eval_duration?: number
   eval_count?: number
@@ -32,7 +35,11 @@ export async function fetchCompletion(
   request: FimRequest,
   signal: AbortSignal
 ): Promise<FimResult> {
-  const stop = config.singleLine ? FIM_STOPS.concat(['\n']) : FIM_STOPS
+  const stop = [
+    ...FIM_STOPS,
+    ...(config.singleLine ? ['\n'] : []),
+    ...(request.stops ?? [])
+  ]
 
   const response = await fetch(`${config.endpoint}/api/generate`, {
     method: 'POST',
@@ -60,6 +67,7 @@ export async function fetchCompletion(
   const body = (await response.json()) as GenerateResponse
   return {
     text: body.response ?? '',
+    doneReason: body.done_reason ?? 'unknown',
     promptTokens: body.prompt_eval_count ?? 0,
     outputTokens: body.eval_count ?? 0,
     prefillMs: toMs(body.prompt_eval_duration),

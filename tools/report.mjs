@@ -2,6 +2,8 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+const SMALL_SAMPLE = 50
+
 const target = process.argv[2]
 if (!target) {
   console.error('usage: node tools/report.mjs <log file or directory>')
@@ -10,8 +12,7 @@ if (!target) {
 }
 
 function logFiles(input) {
-  const stat = fs.statSync(input)
-  if (stat.isFile()) {
+  if (fs.statSync(input).isFile()) {
     return [input]
   }
   return fs
@@ -39,30 +40,36 @@ if (events.length === 0) {
 
 const completions = events.filter((e) => e.event === 'completion')
 const cacheHits = events.filter((e) => e.event === 'cache_hit')
-const accepted = new Set(events.filter((e) => e.event === 'accepted').map((e) => e.id))
 const errors = events.filter((e) => e.event === 'error')
+
+const sources = new Map([...completions, ...cacheHits].map((e) => [e.id, e]))
+const offered = completions.filter((e) => e.suggestionChars > 0)
+const offeredIds = new Set(offered.map((e) => e.id))
+
+const acceptedOrigins = new Set()
+for (const acceptance of events.filter((e) => e.event === 'accepted')) {
+  const source = sources.get(acceptance.id)
+  if (!source) continue
+  const origin = source.event === 'cache_hit' ? source.origin : source.id
+  if (origin && offeredIds.has(origin)) acceptedOrigins.add(origin)
+}
 
 const pct = (values, p) => {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)
   return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)]
 }
+const ratio = (part, whole) => `${part}/${whole} (${((part / Math.max(1, whole)) * 100).toFixed(0)}%)`
 
-const shown = completions.filter((e) => e.suggestionChars > 0)
-const empty = completions.length - shown.length
-
-console.log(`events        ${events.length}`)
-console.log(`requests      ${completions.length}`)
-console.log(`cache hits    ${cacheHits.length}`)
-console.log(`empty results ${empty} (${((empty / Math.max(1, completions.length)) * 100).toFixed(0)}%)`)
-console.log(`errors        ${errors.length}`)
-
-const shownTotal = shown.length + cacheHits.length
-const acceptedShown = [...shown, ...cacheHits].filter((e) => accepted.has(e.id)).length
-console.log(
-  `accept rate   ${acceptedShown}/${shownTotal} ` +
-    `(${((acceptedShown / Math.max(1, shownTotal)) * 100).toFixed(1)}%)`
-)
+console.log(`requests          ${completions.length}`)
+console.log(`suggestions       ${offered.length}`)
+console.log(`typed-through     ${cacheHits.length} re-offers of existing suggestions`)
+console.log(`empty results     ${ratio(completions.length - offered.length, completions.length)}`)
+console.log(`errors            ${errors.length}`)
+console.log(`accept rate       ${ratio(acceptedOrigins.size, offered.length)}`)
+if (offered.length < SMALL_SAMPLE) {
+  console.log(`\nsmall sample: below ${SMALL_SAMPLE} suggestions, treat percentages as noise`)
+}
 
 console.log('\nlatency (ms)')
 console.table({
@@ -77,59 +84,38 @@ console.table({
   }
 })
 
-const warm = completions.filter((e) => e.prefillMs <= 50)
-console.log(
-  `kv cache hit rate (prefill under 50ms): ` +
-    `${warm.length}/${completions.length} ` +
-    `(${((warm.length / Math.max(1, completions.length)) * 100).toFixed(0)}%)`
-)
+console.log(`kv cache warm (prefill under 50ms)  ${ratio(completions.filter((e) => e.prefillMs <= 50).length, completions.length)}`)
 
-const byLanguage = {}
+const reasons = {}
 for (const event of completions) {
-  const row = (byLanguage[event.lang] ??= { requests: 0, empty: 0, shown: 0, acceptedCount: 0, wall: [] })
-  row.requests++
-  row.wall.push(event.wallMs)
-  if (event.suggestionChars > 0) {
-    row.shown++
-    if (accepted.has(event.id)) row.acceptedCount++
-  } else {
-    row.empty++
+  const reason = event.doneReason ?? 'unrecorded'
+  reasons[reason] = (reasons[reason] ?? 0) + 1
+}
+console.log('\nhow generation ended')
+for (const [reason, count] of Object.entries(reasons)) {
+  console.log(`  ${reason.padEnd(12)} ${ratio(count, completions.length)}`)
+}
+
+function summarize(rows) {
+  const shown = rows.filter((e) => e.suggestionChars > 0)
+  return {
+    requests: rows.length,
+    suggestions: shown.length,
+    'accept %': shown.length
+      ? ((shown.filter((e) => acceptedOrigins.has(e.id)).length / shown.length) * 100).toFixed(0)
+      : '-',
+    'empty %': ((1 - shown.length / Math.max(1, rows.length)) * 100).toFixed(0),
+    'wall p50': pct(rows.map((e) => e.wallMs), 50),
+    'wall p95': pct(rows.map((e) => e.wallMs), 95)
   }
 }
 
+const languages = [...new Set(completions.map((e) => e.lang))]
 console.log('\nby language')
-console.table(
-  Object.fromEntries(
-    Object.entries(byLanguage).map(([lang, row]) => [
-      lang,
-      {
-        requests: row.requests,
-        empty: row.empty,
-        'accept %': row.shown > 0 ? ((row.acceptedCount / row.shown) * 100).toFixed(0) : '0',
-        'wall p50': pct(row.wall, 50),
-        'wall p95': pct(row.wall, 95)
-      }
-    ])
-  )
-)
-
-const withBlock = completions.filter((e) => e.blockChars > 0)
-const withoutBlock = completions.filter((e) => !e.blockChars)
-
-const summarize = (rows) => ({
-  requests: rows.length,
-  'accept %':
-    rows.filter((e) => e.suggestionChars > 0).length > 0
-      ? (
-          (rows.filter((e) => e.suggestionChars > 0 && accepted.has(e.id)).length /
-            rows.filter((e) => e.suggestionChars > 0).length) *
-          100
-        ).toFixed(0)
-      : '0',
-  'empty %': ((rows.filter((e) => !e.suggestionChars).length / Math.max(1, rows.length)) * 100).toFixed(0),
-  'wall p50': pct(rows.map((e) => e.wallMs), 50),
-  'wall p95': pct(rows.map((e) => e.wallMs), 95)
-})
+console.table(Object.fromEntries(languages.map((lang) => [lang, summarize(completions.filter((e) => e.lang === lang))])))
 
 console.log('\nsymbol context')
-console.table({ 'with block': summarize(withBlock), 'without block': summarize(withoutBlock) })
+console.table({
+  'with block': summarize(completions.filter((e) => e.blockChars > 0)),
+  'without block': summarize(completions.filter((e) => !e.blockChars))
+})

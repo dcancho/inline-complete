@@ -1,5 +1,5 @@
 import { CompletionCache } from '../src/cache'
-import { cleanCompletion } from '../src/postprocess'
+import { cleanCompletion, dropIncompleteLine, suffixStop } from '../src/postprocess'
 import { firstSignatureLine, formatBlock } from '../src/blockFormat'
 
 let failures = 0
@@ -16,10 +16,13 @@ function check(name: string, actual: unknown, expected: unknown): void {
 }
 
 const cache = new CompletionCache()
-cache.store('var order = await _orders.', 'GetAsync(id, ct);')
+cache.store('var order = await _orders.', 'GetAsync(id, ct);', 'c1')
 
-check('exact hit', cache.lookup('var order = await _orders.'), 'GetAsync(id, ct);')
-check('typed through', cache.lookup('var order = await _orders.Get'), 'Async(id, ct);')
+check('exact hit', cache.lookup('var order = await _orders.'), { text: 'GetAsync(id, ct);', origin: 'c1' })
+check('typed through keeps origin', cache.lookup('var order = await _orders.Get'), {
+  text: 'Async(id, ct);',
+  origin: 'c1'
+})
 check('typed past divergence', cache.lookup('var order = await _orders.Zzz'), undefined)
 check('fully consumed', cache.lookup('var order = await _orders.GetAsync(id, ct);'), undefined)
 check('unrelated prefix', cache.lookup('something else'), undefined)
@@ -42,6 +45,48 @@ check(
 check('drops duplicated closing brace', cleanCompletion('Ok(order);\n}', '\n}\n}', false), 'Ok(order);')
 check('rejects whitespace only', cleanCompletion('   \n  ', '', false), undefined)
 check('rejects empty', cleanCompletion('', '', false), undefined)
+
+check('suffix stop takes first non blank line', suffixStop('\n}'), '\n}')
+check('suffix stop keeps indentation', suffixStop(';\n    }\n}'), '\n    }')
+check('suffix stop skips blank lines', suffixStop('\n\n\napp.Run();'), '\napp.Run();')
+check('suffix stop normalizes crlf', suffixStop('\r\n    }\r\n}'), '\n    }')
+check('suffix stop ignores current line remainder', suffixStop(')\n'), undefined)
+check('suffix stop empty suffix', suffixStop(''), undefined)
+
+check('drop incomplete line', dropIncompleteLine('a\nb\npublic int Mod(int a'), 'a\nb')
+check('drop incomplete line keeps single line', dropIncompleteLine('.WithName("GetApp'), '.WithName("GetApp')
+
+check(
+  'runaway from real ollama output stops at suffix',
+  cleanCompletion(
+    'a+b;\n}\n \npublic int Sub(int a, int b)\n{\n    return a-b;\n}\n \npublic int Mod(int a, int b',
+    '\n}',
+    false,
+    true
+  ),
+  'a+b;'
+)
+check(
+  'truncated without suffix match drops incomplete line',
+  cleanCompletion('a\nb\npublic int Mod(int a', '', false, true),
+  'a\nb'
+)
+check(
+  'inner block brace survives deeper indentation',
+  cleanCompletion('if (x)\n        {\n            y();\n        }', '\n    }\n}', false),
+  'if (x)\n        {\n            y();\n        }'
+)
+check('current line overlap trimmed', cleanCompletion('a, b)', ')\n', false), 'a, b')
+check(
+  'truncated single line is kept for partial accept',
+  cleanCompletion('.WithName("GetApp', '', false, true),
+  '.WithName("GetApp'
+)
+check(
+  'stopped at suffix leaves clean output',
+  cleanCompletion('a+b;', '\n}', false, false),
+  'a+b;'
+)
 
 check(
   'hover fenced block',
