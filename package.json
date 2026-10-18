@@ -107,7 +107,7 @@
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "node esbuild.mjs --smoke && node dist/smoke.cjs",
-    "package": "node esbuild.mjs && vsce package --allow-missing-repository --skip-license",
+    "package": "node esbuild.mjs && vsce package",
     "install_local": "npm run package && code --install-extension inline-complete-0.1.0.vsix --force"
   },
   "devDependencies": {
@@ -118,5 +118,9 @@
     "typescript": "^5.6.3"
   },
   "publisher": "diego",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dcancho/inline-complete"
+  }
 }
