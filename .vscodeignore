@@ -1,7 +1,12 @@
 .vscode/**
+.gitignore
+.gitattributes
 src/**
 tools/**
 node_modules/**
+dist/smoke.cjs
 esbuild.mjs
 tsconfig.json
+package-lock.json
 **/*.map
+**/*.vsix

@@ -3,7 +3,6 @@
   "displayName": "Inline Complete",
   "description": "FIM inline code completion backed by a local Ollama model",
   "version": "0.1.0",
-  "private": true,
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -107,12 +106,17 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node esbuild.mjs --smoke && node dist/smoke.cjs"
+    "test": "node esbuild.mjs --smoke && node dist/smoke.cjs",
+    "package": "node esbuild.mjs && vsce package --allow-missing-repository --skip-license",
+    "install_local": "npm run package && code --install-extension inline-complete-0.1.0.vsix --force"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.6.3"
-  }
+  },
+  "publisher": "diego",
+  "license": "MIT"
 }
