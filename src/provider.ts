@@ -2,9 +2,19 @@ import * as vscode from 'vscode'
 import { Config, readConfig } from './config'
 import { CompletionCache } from './cache'
 import { cleanCompletion } from './postprocess'
-import { fetchCompletion } from './ollama'
+import { fetchCompletion, prime } from './ollama'
+import { SymbolContextStore } from './symbols'
+import { Telemetry } from './telemetry'
 
 const WORD_CHARACTER = /[\w$]/
+
+interface Call {
+  id: string
+  prefix: string
+  suffix: string
+  block: string
+  automatic: boolean
+}
 
 function slicePrefix(document: vscode.TextDocument, position: vscode.Position, limit: number): string {
   const start = document.positionAt(Math.max(0, document.offsetAt(position) - limit))
@@ -17,8 +27,7 @@ function sliceSuffix(document: vscode.TextDocument, position: vscode.Position, l
 }
 
 function insideIdentifier(document: vscode.TextDocument, position: vscode.Position): boolean {
-  const line = document.lineAt(position.line).text
-  const next = line.charAt(position.character)
+  const next = document.lineAt(position.line).text.charAt(position.character)
   return next.length > 0 && WORD_CHARACTER.test(next)
 }
 
@@ -38,12 +47,24 @@ function wait(ms: number, token: vscode.CancellationToken): Promise<boolean> {
 
 export class InlineCompleteProvider implements vscode.InlineCompletionItemProvider {
   private readonly cache = new CompletionCache()
-  private inFlight?: AbortController
+  private readonly symbols = new SymbolContextStore()
+  private inFlight: AbortController | undefined
+  private priming: AbortController | undefined
+  private counter = 0
 
-  constructor(private readonly output: vscode.LogOutputChannel) {}
+  constructor(
+    private readonly output: vscode.LogOutputChannel,
+    private readonly telemetry: Telemetry
+  ) {}
 
   invalidate(): void {
     this.cache.clear()
+    this.symbols.clear()
+  }
+
+  recordAcceptance(id: string): void {
+    this.output.info(`accepted ${id}`)
+    this.telemetry.record({ event: 'accepted', id })
   }
 
   async provideInlineCompletionItems(
@@ -52,23 +73,26 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
     context: vscode.InlineCompletionContext,
     token: vscode.CancellationToken
   ): Promise<vscode.InlineCompletionItem[] | undefined> {
-    this.output.info(
-      `invoked: scheme=${document.uri.scheme} lang=${document.languageId} ` +
-        `pos=${position.line}:${position.character} trigger=${context.triggerKind}`
-    )
-
     const config = readConfig()
     if (!config.enabled || token.isCancellationRequested) {
       return undefined
     }
 
-    const prefix = slicePrefix(document, position, config.maxPrefixChars)
+    const block = this.symbolBlock(config, document, position)
+    const prefix = block + slicePrefix(document, position, config.maxPrefixChars)
     const suffix = sliceSuffix(document, position, config.maxSuffixChars)
+    const id = `c${++this.counter}`
 
     const cached = this.cache.lookup(prefix)
     if (cached) {
       this.output.info(`cache hit, ${cached.length} chars`)
-      return [this.toItem(cached, position)]
+      this.telemetry.record({
+        event: 'cache_hit',
+        id,
+        lang: document.languageId,
+        suggestionChars: cached.length
+      })
+      return [this.toItem(cached, position, id)]
     }
 
     const automatic = context.triggerKind === vscode.InlineCompletionTriggerKind.Automatic
@@ -81,23 +105,74 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
       return undefined
     }
 
-    const budget = automatic
-      ? { ...config, numPredict: config.automaticNumPredict }
-      : config
-
-    const text = await this.request(budget, prefix, suffix, token)
+    const budget = automatic ? { ...config, numPredict: config.automaticNumPredict } : config
+    const call: Call = { id, prefix, suffix, block, automatic }
+    const text = await this.request(budget, document, call, token)
     if (!text) {
       return undefined
     }
 
     this.cache.store(prefix, text)
-    return [this.toItem(text, position)]
+    return [this.toItem(text, position, id)]
+  }
+
+  private symbolBlock(
+    config: Config,
+    document: vscode.TextDocument,
+    position: vscode.Position
+  ): string {
+    if (!config.symbolsEnabled) {
+      return ''
+    }
+    const epoch = this.symbols.epochFor(document, position)
+    this.symbols.ensure(
+      epoch,
+      document,
+      position,
+      {
+        lookbackLines: config.symbolsLookbackLines,
+        maxSymbols: config.symbolsMaxCount,
+        maxChars: config.symbolsMaxChars
+      },
+      (built) => {
+        this.output.info(`symbol block ready, ${built.length} chars`)
+        this.warm(config, document, position, built)
+      }
+    )
+    return this.symbols.get(epoch) ?? ''
+  }
+
+  private warm(
+    config: Config,
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    block: string
+  ): void {
+    if (!config.primingEnabled || block.length === 0) {
+      return
+    }
+    this.priming?.abort()
+    const controller = new AbortController()
+    this.priming = controller
+
+    const prefix = block + slicePrefix(document, position, config.maxPrefixChars)
+    const suffix = sliceSuffix(document, position, config.maxSuffixChars)
+    const started = Date.now()
+
+    void prime(config, { prefix, suffix }, controller.signal).then(() => {
+      if (!controller.signal.aborted) {
+        this.output.debug(`primed kv cache in ${Date.now() - started}ms`)
+      }
+      if (this.priming === controller) {
+        this.priming = undefined
+      }
+    })
   }
 
   private async request(
     config: Config,
-    prefix: string,
-    suffix: string,
+    document: vscode.TextDocument,
+    call: Call,
     token: vscode.CancellationToken
   ): Promise<string | undefined> {
     this.inFlight?.abort()
@@ -110,23 +185,49 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
     const started = Date.now()
 
     try {
-      const raw = await fetchCompletion(config, { prefix, suffix }, controller.signal)
+      const result = await fetchCompletion(
+        config,
+        { prefix: call.prefix, suffix: call.suffix },
+        controller.signal
+      )
       if (token.isCancellationRequested) {
         return undefined
       }
-      const text = cleanCompletion(raw, suffix, config.singleLine)
+
+      const text = cleanCompletion(result.text, call.suffix, config.singleLine)
+      const wallMs = Date.now() - started
+
       this.output.info(
-        `${Date.now() - started}ms prefix=${prefix.length} chars, ` +
-          `raw ${raw.length} chars, suggestion ${text?.length ?? 0} chars, ` +
-          `budget ${config.numPredict} tokens`
+        `${wallMs}ms prefix=${call.prefix.length} chars (${call.block.length} symbols), ` +
+          `raw ${result.text.length} chars, suggestion ${text?.length ?? 0} chars, ` +
+          `prefill ${result.prefillMs}ms decode ${result.decodeMs}ms`
       )
-      if (raw.length > 0 && text === undefined) {
-        this.output.debug(`discarded by cleanup: ${JSON.stringify(raw)}`)
+      if (result.text.length > 0 && text === undefined) {
+        this.output.debug(`discarded by cleanup: ${JSON.stringify(result.text)}`)
       }
+
+      this.telemetry.record({
+        event: 'completion',
+        id: call.id,
+        lang: document.languageId,
+        automatic: call.automatic,
+        budget: config.numPredict,
+        prefixChars: call.prefix.length,
+        blockChars: call.block.length,
+        rawChars: result.text.length,
+        suggestionChars: text?.length ?? 0,
+        wallMs,
+        promptTokens: result.promptTokens,
+        outputTokens: result.outputTokens,
+        prefillMs: result.prefillMs,
+        decodeMs: result.decodeMs
+      })
+
       return text
     } catch (error) {
       if (!controller.signal.aborted) {
         this.output.error(String(error))
+        this.telemetry.record({ event: 'error', id: call.id, message: String(error) })
       }
       return undefined
     } finally {
@@ -138,7 +239,9 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
     }
   }
 
-  private toItem(text: string, position: vscode.Position): vscode.InlineCompletionItem {
-    return new vscode.InlineCompletionItem(text, new vscode.Range(position, position))
+  private toItem(text: string, position: vscode.Position, id: string): vscode.InlineCompletionItem {
+    const item = new vscode.InlineCompletionItem(text, new vscode.Range(position, position))
+    item.command = { command: 'inlineComplete.accepted', title: 'Accepted', arguments: [id] }
+    return item
   }
 }

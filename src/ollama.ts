@@ -7,17 +7,31 @@ export interface FimRequest {
   suffix: string
 }
 
+export interface FimResult {
+  text: string
+  promptTokens: number
+  outputTokens: number
+  prefillMs: number
+  decodeMs: number
+}
+
 interface GenerateResponse {
   response?: string
+  prompt_eval_count?: number
+  prompt_eval_duration?: number
+  eval_count?: number
+  eval_duration?: number
 }
 
 export class OllamaError extends Error {}
+
+const toMs = (nanoseconds: number | undefined): number => Math.round((nanoseconds ?? 0) / 1e6)
 
 export async function fetchCompletion(
   config: Config,
   request: FimRequest,
   signal: AbortSignal
-): Promise<string> {
+): Promise<FimResult> {
   const stop = config.singleLine ? FIM_STOPS.concat(['\n']) : FIM_STOPS
 
   const response = await fetch(`${config.endpoint}/api/generate`, {
@@ -44,5 +58,19 @@ export async function fetchCompletion(
   }
 
   const body = (await response.json()) as GenerateResponse
-  return body.response ?? ''
+  return {
+    text: body.response ?? '',
+    promptTokens: body.prompt_eval_count ?? 0,
+    outputTokens: body.eval_count ?? 0,
+    prefillMs: toMs(body.prompt_eval_duration),
+    decodeMs: toMs(body.eval_duration)
+  }
+}
+
+export async function prime(
+  config: Config,
+  request: FimRequest,
+  signal: AbortSignal
+): Promise<void> {
+  await fetchCompletion({ ...config, numPredict: 1 }, request, signal).catch(() => undefined)
 }

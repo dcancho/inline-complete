@@ -13,6 +13,12 @@ export interface Config {
   maxSuffixChars: number
   singleLine: boolean
   requestTimeoutMs: number
+  symbolsEnabled: boolean
+  symbolsMaxChars: number
+  symbolsMaxCount: number
+  symbolsLookbackLines: number
+  primingEnabled: boolean
+  telemetryEnabled: boolean
 }
 
 export function readConfig(): Config {
@@ -29,6 +35,12 @@ export function readConfig(): Config {
     maxPrefixChars: section.get('maxPrefixChars', 6000),
     maxSuffixChars: section.get('maxSuffixChars', 1500),
     singleLine: section.get('singleLine', false),
-    requestTimeoutMs: section.get('requestTimeoutMs', 3000)
+    requestTimeoutMs: section.get('requestTimeoutMs', 3000),
+    symbolsEnabled: section.get('symbols.enabled', true),
+    symbolsMaxChars: section.get('symbols.maxChars', 1200),
+    symbolsMaxCount: section.get('symbols.maxCount', 12),
+    symbolsLookbackLines: section.get('symbols.lookbackLines', 40),
+    primingEnabled: section.get('priming.enabled', true),
+    telemetryEnabled: section.get('telemetry.enabled', true)
   }
 }

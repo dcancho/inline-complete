@@ -19,6 +19,10 @@
       {
         "command": "inlineComplete.toggle",
         "title": "Inline Complete: Toggle"
+      },
+      {
+        "command": "inlineComplete.openLog",
+        "title": "Inline Complete: Open Telemetry Log"
       }
     ],
     "configuration": {
@@ -71,6 +75,30 @@
         "inlineComplete.automaticNumPredict": {
           "type": "number",
           "default": 32
+        },
+        "inlineComplete.symbols.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "inlineComplete.symbols.maxChars": {
+          "type": "number",
+          "default": 1200
+        },
+        "inlineComplete.symbols.maxCount": {
+          "type": "number",
+          "default": 12
+        },
+        "inlineComplete.symbols.lookbackLines": {
+          "type": "number",
+          "default": 40
+        },
+        "inlineComplete.priming.enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "inlineComplete.telemetry.enabled": {
+          "type": "boolean",
+          "default": true
         }
       }
     }
