@@ -19,6 +19,7 @@ export interface Config {
   symbolsLookbackLines: number
   primingEnabled: boolean
   telemetryEnabled: boolean
+  captureContent: boolean
 }
 
 export function readConfig(): Config {
@@ -41,6 +42,7 @@ export function readConfig(): Config {
     symbolsMaxCount: section.get('symbols.maxCount', 12),
     symbolsLookbackLines: section.get('symbols.lookbackLines', 40),
     primingEnabled: section.get('priming.enabled', true),
-    telemetryEnabled: section.get('telemetry.enabled', true)
+    telemetryEnabled: section.get('telemetry.enabled', true),
+    captureContent: section.get('telemetry.captureContent', false)
   }
 }

@@ -55,6 +55,14 @@ node tools/report.mjs <log directory>
 The report breaks down accept rate and latency by language and by whether the
 symbol block was present.
 
+With `telemetry.captureContent` enabled (off by default), each completion also
+stores the symbol block, the code around the cursor and the suggestion in a
+separate `samples-*.jsonl` file. Review them with:
+
+```bash
+node tools/samples.mjs <log directory> rejected 10
+```
+
 ## Development
 
 ```bash

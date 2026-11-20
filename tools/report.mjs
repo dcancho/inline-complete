@@ -17,7 +17,7 @@ function logFiles(input) {
   }
   return fs
     .readdirSync(input)
-    .filter((name) => name.endsWith('.jsonl'))
+    .filter((name) => name.startsWith('completions-') && name.endsWith('.jsonl'))
     .map((name) => path.join(input, name))
 }
 
@@ -85,6 +85,21 @@ console.table({
 })
 
 console.log(`kv cache warm (prefill under 50ms)  ${ratio(completions.filter((e) => e.prefillMs <= 50).length, completions.length)}`)
+
+const withCode = completions.filter((e) => e.blockChars !== undefined)
+const codeChars = withCode.map((e) => e.prefixChars - e.blockChars)
+console.log(
+  `code before cursor  p50 ${pct(codeChars, 50)} chars, ` +
+    `under 250 chars in ${ratio(codeChars.filter((n) => n < 250).length, withCode.length)}`
+)
+
+const schemes = {}
+for (const event of completions.filter((e) => e.scheme)) {
+  schemes[event.scheme] = (schemes[event.scheme] ?? 0) + 1
+}
+if (Object.keys(schemes).length > 0) {
+  console.log(`document schemes    ${Object.entries(schemes).map(([s, n]) => `${s} ${n}`).join(', ')}`)
+}
 
 const reasons = {}
 for (const event of completions) {

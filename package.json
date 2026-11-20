@@ -98,6 +98,10 @@
         "inlineComplete.telemetry.enabled": {
           "type": "boolean",
           "default": true
+        },
+        "inlineComplete.telemetry.captureContent": {
+          "type": "boolean",
+          "default": false
         }
       }
     }

@@ -1,3 +1,4 @@
+import * as path from 'node:path'
 import * as vscode from 'vscode'
 import { Config, readConfig } from './config'
 import { CompletionCache } from './cache'
@@ -7,6 +8,8 @@ import { SymbolContextStore } from './symbols'
 import { Telemetry } from './telemetry'
 
 const WORD_CHARACTER = /[\w$]/
+const SAMPLE_PREFIX_CHARS = 2000
+const SAMPLE_SUFFIX_CHARS = 500
 
 interface Call {
   id: string
@@ -14,6 +17,17 @@ interface Call {
   suffix: string
   block: string
   automatic: boolean
+  line: number
+}
+
+function documentFacts(document: vscode.TextDocument): Record<string, unknown> {
+  const end = document.lineAt(document.lineCount - 1).range.end
+  return {
+    scheme: document.uri.scheme,
+    ext: path.extname(document.fileName),
+    docChars: document.offsetAt(end),
+    docLines: document.lineCount
+  }
 }
 
 function slicePrefix(document: vscode.TextDocument, position: vscode.Position, limit: number): string {
@@ -107,7 +121,7 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
     }
 
     const budget = automatic ? { ...config, numPredict: config.automaticNumPredict } : config
-    const call: Call = { id, prefix, suffix, block, automatic }
+    const call: Call = { id, prefix, suffix, block, automatic, line: position.line }
     const text = await this.request(budget, document, call, token)
     if (!text) {
       return undefined
@@ -213,6 +227,8 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
         event: 'completion',
         id: call.id,
         lang: document.languageId,
+        ...documentFacts(document),
+        line: call.line,
         automatic: call.automatic,
         budget: config.numPredict,
         prefixChars: call.prefix.length,
@@ -227,6 +243,21 @@ export class InlineCompleteProvider implements vscode.InlineCompletionItemProvid
         prefillMs: result.prefillMs,
         decodeMs: result.decodeMs
       })
+
+      if (config.captureContent) {
+        this.telemetry.sample({
+          id: call.id,
+          lang: document.languageId,
+          file: path.basename(document.fileName),
+          line: call.line,
+          block: call.block,
+          prefixTail: call.prefix.slice(call.block.length).slice(-SAMPLE_PREFIX_CHARS),
+          suffixHead: call.suffix.slice(0, SAMPLE_SUFFIX_CHARS),
+          raw: result.text,
+          suggestion: text ?? null,
+          doneReason: result.doneReason
+        })
+      }
 
       return text
     } catch (error) {
