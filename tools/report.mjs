@@ -54,6 +54,21 @@ for (const acceptance of events.filter((e) => e.event === 'accepted')) {
   if (origin && offeredIds.has(origin)) acceptedOrigins.add(origin)
 }
 
+const shownChars = new Map(offered.map((e) => [e.id, e.suggestionChars]))
+const remaining = new Map()
+let repolls = 0
+let typedThrough = 0
+for (const hit of cacheHits) {
+  const last = remaining.get(hit.origin) ?? shownChars.get(hit.origin)
+  if (hit.suggestionChars === last) repolls++
+  else typedThrough++
+  remaining.set(hit.origin, Math.min(hit.suggestionChars, last ?? Infinity))
+}
+const TYPED_BY_HAND_REMAINDER = 2
+const typedByHand = [...remaining].filter(
+  ([origin, left]) => left <= TYPED_BY_HAND_REMAINDER && !acceptedOrigins.has(origin)
+).length
+
 const pct = (values, p) => {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)
@@ -63,10 +78,11 @@ const ratio = (part, whole) => `${part}/${whole} (${((part / Math.max(1, whole))
 
 console.log(`requests          ${completions.length}`)
 console.log(`suggestions       ${offered.length}`)
-console.log(`typed-through     ${cacheHits.length} re-offers of existing suggestions`)
+console.log(`cache hits        ${typedThrough} while typing through a suggestion, ${repolls} repeated at the same position`)
 console.log(`empty results     ${ratio(completions.length - offered.length, completions.length)}`)
 console.log(`errors            ${errors.length}`)
 console.log(`accept rate       ${ratio(acceptedOrigins.size, offered.length)}`)
+console.log(`typed by hand     ${ratio(typedByHand, offered.length)} typed to within ${TYPED_BY_HAND_REMAINDER} chars of the end without accepting`)
 if (offered.length < SMALL_SAMPLE) {
   console.log(`\nsmall sample: below ${SMALL_SAMPLE} suggestions, treat percentages as noise`)
 }
